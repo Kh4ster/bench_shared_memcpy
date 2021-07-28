@@ -13,42 +13,36 @@ class Fixture : public benchmark::Fixture
     void
     bench(benchmark::State& st, FUNC callback, std::size_t size, Args&&... args)
     {
-        cuda_tools::host_shared_ptr<int> buffer(size);
+        cuda_tools::host_shared_ptr<int> result(size);
+        cuda_tools::host_shared_ptr<int> global1(size);
+        cuda_tools::host_shared_ptr<int> global2(size);
 
         for (auto _ : st)
-            callback(buffer, std::forward<Args>(args)...);
+            callback(result, global1, global2, std::forward<Args>(args)...);
 
         st.SetBytesProcessed(int64_t(st.iterations()) *
                              int64_t(size * sizeof(int)));
 
-        if (!no_check)
-            check_buffer(buffer);
+        // if (!no_check)
+        //    check_buffer(buffer);
     }
 };
 
 bool Fixture::no_check = false;
 
-// Basic bench
-// Remove me (it is simply a sample)
-BENCHMARK_DEFINE_F(Fixture, First_Bench)
+BENCHMARK_DEFINE_F(Fixture, Basic)
+(benchmark::State& st) { this->bench(st, basic, std::size_t(1) << 26); }
+
+BENCHMARK_DEFINE_F(Fixture, Cooperative_basic)
 (benchmark::State& st)
 {
-    this->bench(st, to_bench_single, std::size_t(1) << 25);
+    this->bench(st, cooperative_basic, std::size_t(1) << 26);
 }
 
-BENCHMARK_REGISTER_F(Fixture, First_Bench)
+BENCHMARK_REGISTER_F(Fixture, Basic)
     ->UseRealTime()
     ->Unit(benchmark::kMillisecond);
-
-// Bench a function with multiple arguments
-// Remove me (it is simply a sample)
-BENCHMARK_DEFINE_F(Fixture, Bench_Multiple_Args)
-(benchmark::State& st)
-{
-    this->bench(st, to_bench_multiple, std::size_t(1) << 25, 64, 1);
-}
-
-BENCHMARK_REGISTER_F(Fixture, Bench_Multiple_Args)
+BENCHMARK_REGISTER_F(Fixture, Cooperative_basic)
     ->UseRealTime()
     ->Unit(benchmark::kMillisecond);
 

@@ -6,53 +6,120 @@
 
 #include <cuda_profiler_api.h>
 
-__global__
-void kernel(cuda_tools::device_buffer<int> buffer)
+#include <cooperative_groups.h>
+#include <cuda_profiler_api.h>
+
+using namespace cooperative_groups;
+
+// Dummy compute just for the sake of having one
+template <typename T>
+__device__
+static void compute(thread_group g, T shared[])
 {
-    int index = threadIdx.x + blockIdx.x * blockDim.x;
-    if (index < buffer.size_)
-        buffer[index] = 0;
+    shared[g.thread_rank()] += shared[g.thread_rank() + g.size()];
 }
 
-void to_bench_single(cuda_tools::host_shared_ptr<int> buffer)
+template <typename T, int block_width>
+__global__
+static void basic(cuda_tools::device_buffer<T> result,
+                  cuda_tools::device_buffer<T> global1,
+                  cuda_tools::device_buffer<T> global2)
+{
+    __shared__ T shared[block_width * 2];
+    auto group = cooperative_groups::this_thread_block();
+
+    const int tx = threadIdx.x;
+    const int gx = tx + blockIdx.x * blockDim.x;
+    if (gx >= result.size_) return;
+ 
+    shared[group.thread_rank()               ] = global1[gx];
+    shared[group.size() + group.thread_rank()] = global2[gx];
+ 
+    group.sync(); // Wait for all copies to complete
+ 
+    compute(group, shared);
+
+    result[gx] = shared[group.thread_rank()];
+}
+
+template <typename T, int block_width>
+__global__
+static void cooperative_basic(cuda_tools::device_buffer<T> result,
+                              cuda_tools::device_buffer<T> global1,
+                              cuda_tools::device_buffer<T> global2,
+                              const int subset_count)
+{
+    __shared__ T shared[block_width * 2];
+    auto group = cooperative_groups::this_thread_block();
+
+    const int tx = threadIdx.x;
+    const int gx = tx + blockIdx.x * blockDim.x;
+    if (gx * subset_count >= result.size_) return;
+ 
+    for (int subset = 0; subset < subset_count; ++subset)
+    {
+        shared[group.thread_rank()               ] = global1[subset * group.size() + gx];
+        shared[group.size() + group.thread_rank()] = global2[subset * group.size() + gx];
+ 
+        group.sync(); // Wait for all copies to complete
+ 
+        compute(group, shared);
+
+        result[gx + subset * group.size()] = shared[group.thread_rank()];
+
+        group.sync();
+    }
+}
+
+void basic(cuda_tools::host_shared_ptr<int> _result,
+           cuda_tools::host_shared_ptr<int> _global1,
+           cuda_tools::host_shared_ptr<int> _global2)
 {
     constexpr int TILE_WIDTH  = 64;
     constexpr int TILE_HEIGHT = 1;
-    
-    cudaProfilerStart();
-    cudaFuncSetCacheConfig(kernel, cudaFuncCachePreferL1);
-    
-    cuda_tools::device_buffer<int> device_buffer(buffer);
 
-    const int gx = (buffer.size_ + TILE_WIDTH - 1) / TILE_WIDTH;
-    const int gy = 1;
+    cudaProfilerStart();
+    cudaFuncSetCacheConfig(basic<int, TILE_WIDTH>, cudaFuncCachePreferShared);
+    
+    cuda_tools::device_buffer<int> result(_result);
+    cuda_tools::device_buffer<int> global1(_global1);
+    cuda_tools::device_buffer<int> global2(_global2);
+
+    const int gx             = (result.size_ + TILE_WIDTH - 1) / (TILE_WIDTH);
+    const int gy             = 1;
 
     const dim3 block(TILE_WIDTH, TILE_HEIGHT);
     const dim3 grid(gx, gy);
 
-    kernel<<<grid, block>>>(device_buffer);
+    basic<int, TILE_WIDTH><<<grid, block>>>(result, global1, global2);
     kernel_check_error();
 
     cudaDeviceSynchronize();
     cudaProfilerStop();
 }
 
-void to_bench_multiple(cuda_tools::host_shared_ptr<int> buffer,
-              int tile_width,
-              int tile_height)
+void cooperative_basic(cuda_tools::host_shared_ptr<int> _result,
+                       cuda_tools::host_shared_ptr<int> _global1,
+                       cuda_tools::host_shared_ptr<int> _global2)
 {
+    constexpr int TILE_WIDTH  = 64;
+    constexpr int TILE_HEIGHT = 1;
+    constexpr int SUBSET_COUNT = 4;
+
     cudaProfilerStart();
-    cudaFuncSetCacheConfig(kernel, cudaFuncCachePreferL1);
+    cudaFuncSetCacheConfig(cooperative_basic<int, TILE_WIDTH>, cudaFuncCachePreferShared);
 
-    cuda_tools::device_buffer<int> device_buffer(buffer);
+    cuda_tools::device_buffer<int> result(_result);
+    cuda_tools::device_buffer<int> global1(_global1);
+    cuda_tools::device_buffer<int> global2(_global2);
 
-    const int gx = (buffer.size_ + tile_width - 1) / tile_width;
-    const int gy = 1;
-
-    const dim3 block(tile_width, tile_height);
+    const int gx             = (result.size_ + TILE_WIDTH - 1) / (TILE_WIDTH * SUBSET_COUNT);
+    const int gy             = 1;
+    
+    const dim3 block(TILE_WIDTH, TILE_HEIGHT);
     const dim3 grid(gx, gy);
 
-    kernel<<<grid, block>>>(device_buffer);
+    cooperative_basic<int, TILE_WIDTH><<<grid, block>>>(result, global1, global2, SUBSET_COUNT);
     kernel_check_error();
 
     cudaDeviceSynchronize();
