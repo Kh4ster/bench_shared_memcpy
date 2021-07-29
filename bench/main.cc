@@ -45,10 +45,19 @@ BENCHMARK_DEFINE_F(Fixture, Cooperative_basic)
     this->bench(st, cooperative_basic, std::size_t(1) << 26);
 }
 
+BENCHMARK_DEFINE_F(Fixture, Cooperative_async)
+(benchmark::State& st)
+{
+    this->bench(st, cooperative_async, std::size_t(1) << 26);
+}
+
 BENCHMARK_REGISTER_F(Fixture, Basic)
     ->UseRealTime()
     ->Unit(benchmark::kMillisecond);
 BENCHMARK_REGISTER_F(Fixture, Cooperative_basic)
+    ->UseRealTime()
+    ->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(Fixture, Cooperative_async)
     ->UseRealTime()
     ->Unit(benchmark::kMillisecond);
 

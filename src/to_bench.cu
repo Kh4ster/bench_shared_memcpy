@@ -7,6 +7,7 @@
 #include <cuda_profiler_api.h>
 
 #include <cooperative_groups.h>
+#include <cooperative_groups/memcpy_async.h>
 #include <cuda_profiler_api.h>
 
 using namespace cooperative_groups;
@@ -72,6 +73,38 @@ static void cooperative_basic(cuda_tools::device_buffer<T> result,
     }
 }
 
+template <typename T, int block_width>
+__global__
+static void cooperative_async(cuda_tools::device_buffer<T> result,
+                              cuda_tools::device_buffer<T> global1,
+                              cuda_tools::device_buffer<T> global2,
+                              const int subset_count)
+{
+    __shared__ T shared[block_width * 2];
+    auto group = cooperative_groups::this_thread_block();
+
+    const int tx = threadIdx.x;
+    const int gx = tx + blockIdx.x * blockDim.x;
+    if (gx * subset_count >= result.size_) return;
+    const int grid_size = blockDim.x * gridDim.x;
+ 
+    for (int subset = 0; subset < subset_count; ++subset)
+    {
+        cooperative_groups::memcpy_async(group, shared,
+            &global1[subset * grid_size + gx], sizeof(T) * group.size());
+        cooperative_groups::memcpy_async(group, shared + group.size(),
+            &global2[subset * grid_size + gx], sizeof(T) * group.size());
+
+        cooperative_groups::wait(group); // Wait for all copies to complete
+ 
+        compute(group, shared);
+
+        result[gx + subset * grid_size] = shared[group.thread_rank()];
+
+        group.sync();
+    }
+}
+
 void basic(cuda_tools::host_shared_ptr<int> _result,
            cuda_tools::host_shared_ptr<int> _global1,
            cuda_tools::host_shared_ptr<int> _global2)
@@ -105,7 +138,7 @@ void cooperative_basic(cuda_tools::host_shared_ptr<int> _result,
 {
     constexpr int TILE_WIDTH  = 64;
     constexpr int TILE_HEIGHT = 1;
-    constexpr int SUBSET_COUNT = 2;
+    constexpr int SUBSET_COUNT = 4;
 
     cudaProfilerStart();
     cudaFuncSetCacheConfig(cooperative_basic<int, TILE_WIDTH>, cudaFuncCachePreferShared);
@@ -121,6 +154,34 @@ void cooperative_basic(cuda_tools::host_shared_ptr<int> _result,
     const dim3 grid(gx, gy);
 
     cooperative_basic<int, TILE_WIDTH><<<grid, block>>>(result, global1, global2, SUBSET_COUNT);
+    kernel_check_error();
+
+    cudaDeviceSynchronize();
+    cudaProfilerStop();
+}
+
+void cooperative_async(cuda_tools::host_shared_ptr<int> _result,
+    cuda_tools::host_shared_ptr<int> _global1,
+    cuda_tools::host_shared_ptr<int> _global2)
+{
+    constexpr int TILE_WIDTH  = 64;
+    constexpr int TILE_HEIGHT = 1;
+    constexpr int SUBSET_COUNT = 1;
+
+    cudaProfilerStart();
+    cudaFuncSetCacheConfig(cooperative_async<int, TILE_WIDTH>, cudaFuncCachePreferShared);
+
+    cuda_tools::device_buffer<int> result(_result);
+    cuda_tools::device_buffer<int> global1(_global1);
+    cuda_tools::device_buffer<int> global2(_global2);
+
+    const int gx             = (result.size_ + TILE_WIDTH - 1) / (TILE_WIDTH * SUBSET_COUNT);
+    const int gy             = 1;
+
+    const dim3 block(TILE_WIDTH, TILE_HEIGHT);
+    const dim3 grid(gx, gy);
+
+    cooperative_async<int, TILE_WIDTH><<<grid, block>>>(result, global1, global2, SUBSET_COUNT);
     kernel_check_error();
 
     cudaDeviceSynchronize();
