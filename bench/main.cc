@@ -13,9 +13,14 @@ class Fixture : public benchmark::Fixture
     void
     bench(benchmark::State& st, FUNC callback, std::size_t size, Args&&... args)
     {
+        constexpr int val1 = 4;
+        constexpr int val2 = 6;
+
         cuda_tools::host_shared_ptr<int> result(size);
         cuda_tools::host_shared_ptr<int> global1(size);
         cuda_tools::host_shared_ptr<int> global2(size);
+        global1.fill(val1);
+        global2.fill(val2);
 
         for (auto _ : st)
             callback(result, global1, global2, std::forward<Args>(args)...);
@@ -23,8 +28,9 @@ class Fixture : public benchmark::Fixture
         st.SetBytesProcessed(int64_t(st.iterations()) *
                              int64_t(size * sizeof(int)));
 
-        // if (!no_check)
-        //    check_buffer(buffer);
+        auto lambda = [val1, val2](int i) { return i == (val1 + val2); };
+        if (!no_check)
+            check_buffer(result, lambda);
     }
 };
 

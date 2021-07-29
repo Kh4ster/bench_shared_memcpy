@@ -55,17 +55,18 @@ static void cooperative_basic(cuda_tools::device_buffer<T> result,
     const int tx = threadIdx.x;
     const int gx = tx + blockIdx.x * blockDim.x;
     if (gx * subset_count >= result.size_) return;
+    const int grid_size = blockDim.x * gridDim.x;
  
     for (int subset = 0; subset < subset_count; ++subset)
     {
-        shared[group.thread_rank()               ] = global1[subset * group.size() + gx];
-        shared[group.size() + group.thread_rank()] = global2[subset * group.size() + gx];
+        shared[group.thread_rank()               ] = global1[subset * grid_size + gx];
+        shared[group.size() + group.thread_rank()] = global2[subset * grid_size + gx];
  
         group.sync(); // Wait for all copies to complete
  
         compute(group, shared);
 
-        result[gx + subset * group.size()] = shared[group.thread_rank()];
+        result[gx + subset * grid_size] = shared[group.thread_rank()];
 
         group.sync();
     }
@@ -104,7 +105,7 @@ void cooperative_basic(cuda_tools::host_shared_ptr<int> _result,
 {
     constexpr int TILE_WIDTH  = 64;
     constexpr int TILE_HEIGHT = 1;
-    constexpr int SUBSET_COUNT = 4;
+    constexpr int SUBSET_COUNT = 2;
 
     cudaProfilerStart();
     cudaFuncSetCacheConfig(cooperative_basic<int, TILE_WIDTH>, cudaFuncCachePreferShared);
