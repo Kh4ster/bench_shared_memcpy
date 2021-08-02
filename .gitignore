@@ -2,5 +2,4 @@ build
 build_release
 build_debug
 settings.json
-sync.md
 *.ncu*
